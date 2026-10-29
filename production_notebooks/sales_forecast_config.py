@@ -1,0 +1,31 @@
+"""Frozen production configuration for the first-90-day sales forecast."""
+TARGET="avg_sales"; DATE_COLUMN="open_date"; TARGET_MIN=5000.; TARGET_MAX=70000.
+SELECTED_MODEL="stack_simplex_balanced_10_4"
+SELECTED_OVERALL_MODEL="v2_102_lgb_access"
+OFFICIAL_POINT_MODEL="v2_128_lgb_static"
+FEATURE_COLUMNS=['total_population_1','worker_population_1','daytime_population_1','total_households_1',
+'competitor_count_1','boundary_5','boundary_10','boundary_15','boundary_20','boundary_25','boundary_30',
+'months_6m','months_12m','months_18m','months_24m','months_30m','months_36m','avg_population_growth_1',
+'total_households_per_sq_mile_1','med_household_income_1','med_disposable_income_1','avg_disposable_income_1',
+'annual_budget_expenditure_1','annual_budget_expenditure_index_1','med_home_value_1','avg_home_value_1',
+'food_away_from_home_1','bigbox_1','bigbox_2','bigbox_3','competitor_1','competitor_2','competitor_3',
+'highway_5','highway_10','highway_5min','highway_10min','close_highway_dist','avg_monthly_sales_closest_1year',
+'growth_rate_closest','avg_monthly_sales_mean_1year','growth_rate_mean','avg_monthly_sales_25th_1year',
+'growth_rate_25th','avg_monthly_sales_75th_1year','growth_rate_75th','median_average_daily_traffic_1',
+'max_average_daily_traffic_1','median_average_daily_traffic_2','max_average_daily_traffic_2',
+'median_average_daily_traffic_3','max_average_daily_traffic_3','subtype','state','region',
+'density_classification_1','ssam_flag','no_dt_flag','inline_flag']
+LOCATION_ATTRIBUTE_COLUMNS=['is_relocated','prototype','building_square_footage','total_site_square_footage',
+'has_outside_seating','maximum_occupancy','has_cross_parking','has_bypass_lane','has_drivethru_door',
+'total_drivethru_lanes','total_order_points','playground']
+ENSEMBLES={SELECTED_MODEL:{"name":SELECTED_MODEL,"names":["v2_379_quality_mixture_rich","v2_122_lgb_static","v2_128_lgb_static","v2_181_lgb_original"],"mode":"simplex_balanced","alpha":10}}
+LEGACY_LOW_STRETCHES={
+SELECTED_MODEL:{"method":"distance","by_subtype":False,"dead_zone":0.,"nonlinear":False,"left":.25,"right":0.},
+SELECTED_OVERALL_MODEL:{"method":"distance","by_subtype":True,"dead_zone":0.,"nonlinear":False,"left":1.,"right":0.},
+OFFICIAL_POINT_MODEL:{"method":"distance","by_subtype":True,"dead_zone":0.,"nonlinear":False,"left":.5,"right":0.}}
+MODEL_CONFIGS={
+"v2_102_lgb_access":{"features":"access","transform":"raw","loss":"regression","alpha":.5,"trees":800,"lr":.02,"depth":5,"leaves":15,"min_child":40,"reg_lambda":5.,"reg_alpha":1.,"colsample":1.,"relative_power":.5,"low_weight":2.,"high_weight":3.,"half_life":730,"balance":False,"native_cat":True,"selector":None,"top_k":10,"clip":False,"family":"lgb","name":"v2_102_lgb_access"},
+"v2_122_lgb_static":{"features":"static","transform":"log","loss":"regression_l1","alpha":.75,"trees":450,"lr":.02,"depth":7,"leaves":31,"min_child":40,"reg_lambda":5.,"reg_alpha":0.,"colsample":.7,"relative_power":1.,"low_weight":4.,"high_weight":3.,"half_life":None,"balance":True,"native_cat":True,"selector":None,"top_k":20,"clip":False,"family":"lgb","name":"v2_122_lgb_static"},
+"v2_128_lgb_static":{"features":"static","transform":"raw","loss":"quantile","alpha":.25,"trees":800,"lr":.07,"depth":7,"leaves":15,"min_child":40,"reg_lambda":20.,"reg_alpha":0.,"colsample":1.,"relative_power":1.,"low_weight":2.,"high_weight":3.,"half_life":730,"balance":True,"native_cat":True,"selector":None,"top_k":35,"clip":False,"family":"lgb","name":"v2_128_lgb_static"},
+"v2_181_lgb_original":{"features":"original","transform":"peer_log","loss":"regression","alpha":.5,"trees":800,"lr":.04,"depth":5,"leaves":15,"min_child":65,"reg_lambda":20.,"reg_alpha":1.,"colsample":1.,"relative_power":1.5,"low_weight":4.,"high_weight":1.,"half_life":None,"balance":False,"native_cat":True,"selector":None,"top_k":35,"clip":False,"family":"lgb","name":"v2_181_lgb_original"},
+"v2_379_quality_mixture_rich":{"family":"quality_mixture","features":"rich","quality_basis":"peer","hard_gate":True,"balanced_gate":True,"correct_prior":False,"name":"v2_379_quality_mixture_rich"}}
