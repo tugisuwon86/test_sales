@@ -52,9 +52,11 @@ from sales_forecast_pipeline import (
     RANGE_CALIBRATION_SCHEMA,
     REQUIRED_INPUT_COLUMNS,
     TARGET,
+    TIER_CUTOFF_SCHEMA,
     SalesForecastModel,
     calibrate_ranges,
     fit_router,
+    fit_tier_cutoffs,
     nulls_to_none,
     prepare_model_input,
     uses_attribute_model,
@@ -121,8 +123,16 @@ HOLDOUT_PHASES = [
 # MAGIC MALL, and incomplete FSU rows.
 # MAGIC
 # MAGIC The planning range uses no standard deviation. Each side starts at 15%, is
-# MAGIC adjusted from held-out signed errors by subtype and region, and is capped at
-# MAGIC 20%. Groups with fewer than 12 rows fall back to subtype and then overall.
+# MAGIC set from the 70th percentile of held-out signed errors by subtype and region,
+# MAGIC and is capped at 25%. Groups with fewer than 12 rows fall back to subtype and
+# MAGIC then overall. Walk-forward over 877 out-of-time forecasts, this rule covered
+# MAGIC 65.3% of actuals at 44.9% mean width; the earlier 20% cap and 60th
+# MAGIC percentile covered 55.0% at 36.9%. Tier-specific ranges did not improve
+# MAGIC coverage at equal width, so the range is not split by tier.
+# MAGIC
+# MAGIC Each forecast is labelled low, mid, or high against tertiles of actual
+# MAGIC 90-day sales among openings in the last two years of its subtype. Subtypes
+# MAGIC with fewer than 30 recent openings use their full history.
 
 # COMMAND ----------
 
@@ -138,9 +148,12 @@ FALLBACK_CONFIG = MODEL_CONFIGS["v2_128_lgb_static"]
 MIN_CORE_FRACTION = 0.70
 
 BASE_STRETCH = 0.15
-MAX_STRETCH = 0.20
+MAX_STRETCH = 0.25
 MIN_GROUP_ROWS = 12
-CALIBRATION_QUANTILE = 0.60
+CALIBRATION_QUANTILE = 0.70
+
+TIER_RECENT_DAYS = 730
+TIER_MIN_ROWS = 30
 
 # COMMAND ----------
 
@@ -208,6 +221,8 @@ with mlflow.start_run(tags={"project": PROJECT, "stage": "training"}) as run:
             "max_stretch": MAX_STRETCH,
             "min_group_rows": MIN_GROUP_ROWS,
             "calibration_quantile": CALIBRATION_QUANTILE,
+            "tier_recent_days": TIER_RECENT_DAYS,
+            "tier_min_rows": TIER_MIN_ROWS,
         }
     )
     mlflow.log_dict(
@@ -257,6 +272,16 @@ with mlflow.start_run(tags={"project": PROJECT, "stage": "training"}) as run:
     connector.write(
         spark.createDataFrame(nulls_to_none(calibration), RANGE_CALIBRATION_SCHEMA),
         destination=f"{SCHEMA_FQN}.range_calibration",
+        mode=WriteMode.APPEND,
+    )
+
+    # Tier cutoffs come from every mature row, like the final refit.
+    tier_cutoffs = fit_tier_cutoffs(data, TIER_RECENT_DAYS, TIER_MIN_ROWS).assign(
+        training_run_id=TRAINING_RUN_ID
+    )
+    connector.write(
+        spark.createDataFrame(nulls_to_none(tier_cutoffs), TIER_CUTOFF_SCHEMA),
+        destination=f"{SCHEMA_FQN}.tier_cutoffs",
         mode=WriteMode.APPEND,
     )
 

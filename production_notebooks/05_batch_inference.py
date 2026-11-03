@@ -50,6 +50,7 @@ from sales_forecast_pipeline import (
     HORIZON_DAYS,
     TARGET,
     apply_ranges,
+    assign_tiers,
     nulls_to_none,
     uses_attribute_model,
 )
@@ -103,7 +104,9 @@ AS_OF_DATE = pd.Timestamp(
 # MAGIC feature tables available; explicit inputs do not remove metadata dependencies.
 # MAGIC
 # MAGIC The planning range comes from the calibration saved by the selected model's
-# MAGIC training run: subtype + region, then subtype, then overall, each side 15% to 20%.
+# MAGIC training run: subtype + region, then subtype, then overall, each side 15% to 25%.
+# MAGIC The `tier` column labels each forecast low, mid, or high against the same
+# MAGIC run's cutoffs: tertiles of recent openings' actual 90-day sales by subtype.
 
 # COMMAND ----------
 
@@ -161,6 +164,14 @@ with mlflow.start_run(tags={"project": PROJECT, "stage": "batch_inference"}) as 
         """,
         args={"table": f"{SCHEMA_FQN}.range_calibration", "run_id": model_run_id},
     ).toPandas()
+    tier_cutoffs = spark.sql(
+        """
+        select *
+        from identifier(:table)
+        where training_run_id = :run_id
+        """,
+        args={"table": f"{SCHEMA_FQN}.tier_cutoffs", "run_id": model_run_id},
+    ).toPandas()
     descriptors = features.select(
         *ENTITY_KEYS,
         *[c for c in ["location_name", DATE, "subtype", "region"] if c in features.columns],
@@ -175,7 +186,7 @@ with mlflow.start_run(tags={"project": PROJECT, "stage": "batch_inference"}) as 
         .toPandas()
     )
     scored["used_attribute_model"] = uses_attribute_model(scored, min_core_fraction)
-    scored = apply_ranges(scored, calibration).drop(
+    scored = apply_ranges(assign_tiers(scored, tier_cutoffs), calibration).drop(
         columns=[c for c in CORE_ATTRIBUTES if c in scored]
     )
     predictions = spark.createDataFrame(nulls_to_none(scored))

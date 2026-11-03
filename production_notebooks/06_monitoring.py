@@ -135,6 +135,10 @@ with mlflow.start_run(tags={"project": PROJECT, "stage": "monitoring"}) as run:
         metric_values[metric_name("rows_subtype", subtype)] = len(g)
     for level, g in frame.groupby("range_calibration_level"):
         metric_values[metric_name("range_level_share", level)] = len(g) / len(frame)
+    # Tiers are tertiles of recent openings, so a large swing in these shares
+    # means this batch looks different from the recent cohort.
+    for tier in ["low", "mid", "high"]:
+        metric_values[metric_name("tier_share", tier)] = float(frame.tier.eq(tier).mean())
 
     if ACTUALS_FEATURE_RUN_ID:
         # Only labels whose 90-day window has closed are compared.

@@ -3,7 +3,8 @@
 The approved model logic lives in advanced_sales_models.py, attribute_router.py,
 forecast_experiments.py and sales_forecast_config.py, copied unchanged from
 production_ready. This module only normalizes Spark-loaded rows, wraps the
-router for MLflow, and applies the capped subtype-and-region range rule.
+router for MLflow, applies the capped subtype-and-region range rule, and
+labels each forecast with a low, mid, or high tier.
 """
 from pathlib import Path
 import re
@@ -114,7 +115,70 @@ def segment_wape(frame, split):
     for column, segment, g in _flag_groups(frame):
         rows.append({"split": split, "dimension": column, "segment": segment,
                      "locations": len(g), "WAPE": wape(g[TARGET], g.prediction)})
+    for tier, g in _tier_groups(frame):
+        rows.append({"split": split, "dimension": "tier", "segment": tier,
+                     "locations": len(g), "WAPE": wape(g[TARGET], g.prediction)})
     return pd.DataFrame(rows, columns=["split", "dimension", "segment", "locations", "WAPE"])
+
+
+TIERS = ["low", "mid", "high"]
+TIER_CUTOFF_SCHEMA = (
+    "subtype string, basis string, rows long, "
+    "tier_low_max double, tier_high_min double, training_run_id string"
+)
+
+
+def _tier_groups(frame):
+    if "tier" in frame:
+        for tier in TIERS:
+            group = frame[frame.tier.eq(tier).to_numpy()]
+            if len(group):
+                yield tier, group
+
+
+def fit_tier_cutoffs(data, recent_days=730, min_rows=30):
+    """Tertiles of actual 90-day sales among recent openings, by subtype.
+
+    A subtype with too few recent openings uses its full history, then the
+    recent openings of every subtype. Recent cohorts keep tiers from drifting
+    as sales grow.
+    """
+    labelled = data.dropna(subset=[TARGET])
+    recent = labelled[labelled[DATE] > labelled[DATE].max() - pd.Timedelta(days=recent_days)]
+
+    def cut(subtype, basis, values):
+        low, high = values.quantile([1 / 3, 2 / 3])
+        return {"subtype": subtype, "basis": basis, "rows": len(values),
+                "tier_low_max": float(low), "tier_high_min": float(high)}
+
+    rows = [cut(None, "overall_recent", recent[TARGET])]
+    for subtype in sorted(labelled.subtype.dropna().unique()):
+        subtype_recent = recent.loc[recent.subtype.eq(subtype), TARGET]
+        subtype_all = labelled.loc[labelled.subtype.eq(subtype), TARGET]
+        if len(subtype_recent) >= min_rows:
+            rows.append(cut(subtype, "subtype_recent", subtype_recent))
+        elif len(subtype_all) >= min_rows:
+            rows.append(cut(subtype, "subtype_all", subtype_all))
+        else:
+            rows.append(dict(rows[0], subtype=subtype))
+    return pd.DataFrame(rows)
+
+
+def assign_tiers(frame, cutoffs, point="forecast_point"):
+    """Label each forecast low, mid, or high against its subtype's cutoffs."""
+    overall = cutoffs[cutoffs.subtype.isna()]
+    if len(overall) != 1:
+        raise ValueError("The tier cutoffs need exactly one overall row")
+    overall = next(overall.itertuples())
+    by_subtype = {r.subtype: r for r in cutoffs[cutoffs.subtype.notna()].itertuples()}
+    chosen = [by_subtype.get(s) or overall for s in frame.subtype]
+    low = np.array([c.tier_low_max for c in chosen], dtype=float)
+    high = np.array([c.tier_high_min for c in chosen], dtype=float)
+    value = frame[point].to_numpy(dtype=float)
+    tier = np.where(value < low, "low", np.where(value > high, "high", "mid"))
+    out = frame.copy()
+    out["tier"] = pd.Series(np.where(np.isnan(value), None, tier), index=out.index, dtype=object)
+    return out
 
 
 RANGE_CALIBRATION_SCHEMA = (
@@ -189,6 +253,9 @@ def range_coverage(check):
                          "coverage_pct": 100 * g.covered.mean()})
     for column, segment, g in _flag_groups(check):
         rows.append({"dimension": column, "segment": segment, "locations": len(g),
+                     "coverage_pct": 100 * g.covered.mean()})
+    for tier, g in _tier_groups(check):
+        rows.append({"dimension": "tier", "segment": tier, "locations": len(g),
                      "coverage_pct": 100 * g.covered.mean()})
     return pd.DataFrame(rows, columns=["dimension", "segment", "locations", "coverage_pct"])
 

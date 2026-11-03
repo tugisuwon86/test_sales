@@ -44,6 +44,7 @@ from roost.connector.systems.database import (
 )
 from sales_forecast_pipeline import (
     apply_ranges,
+    assign_tiers,
     fixed_range_coverage,
     metric_name,
     range_coverage,
@@ -81,10 +82,11 @@ if not TRAINING_RUN_ID:
 if mlflow.get_run(TRAINING_RUN_ID).info.status != "FINISHED":
     raise ValueError("Choose a successful upstream run")
 
-# Acceptance limits. The approved design scored 17.66% test WAPE and 56.7%
-# range coverage on 210 locations; confirm these limits with Su.
+# Acceptance limits. The approved design scored 17.66% test WAPE on 210
+# locations. The 25% cap covered 65.3% walk-forward and 70.0% on the benchmark
+# when calibrated on earlier periods; confirm these limits with Su.
 dbutils.widgets.text("max_test_wape", "20.0")
-dbutils.widgets.text("min_range_coverage", "50.0")
+dbutils.widgets.text("min_range_coverage", "60.0")
 dbutils.widgets.text("min_test_rows", "30")
 MAX_TEST_WAPE = float(dbutils.widgets.get("max_test_wape"))
 MIN_RANGE_COVERAGE = float(dbutils.widgets.get("min_range_coverage"))
@@ -102,6 +104,8 @@ MIN_TEST_ROWS = int(dbutils.widgets.get("min_test_rows"))
 # MAGIC is within `max_test_wape`, and the capped dynamic range covers at least
 # MAGIC `min_range_coverage` percent of test actuals. Range coverage is measured on
 # MAGIC the same rows that calibrated it, so read it with the fixed-range table.
+# MAGIC WAPE and coverage are also reported by forecast tier; tiers do not decide
+# MAGIC acceptance.
 
 # COMMAND ----------
 
@@ -144,7 +148,17 @@ with mlflow.start_run(tags={"project": PROJECT, "stage": "validation"}) as run:
         """,
         args={"table": f"{SCHEMA_FQN}.range_calibration", "run_id": TRAINING_RUN_ID},
     ).toPandas()
-    test = predictions.toPandas()
+    tier_cutoffs = spark.sql(
+        """
+        select *
+        from identifier(:table)
+        where training_run_id = :run_id
+        """,
+        args={"table": f"{SCHEMA_FQN}.tier_cutoffs", "run_id": TRAINING_RUN_ID},
+    ).toPandas()
+    test = assign_tiers(predictions.toPandas(), tier_cutoffs, point="prediction")
+    if len(confirmation):
+        confirmation = assign_tiers(confirmation, tier_cutoffs, point="prediction")
 
     wape_table = pd.concat(
         [segment_wape(test, "test")]
